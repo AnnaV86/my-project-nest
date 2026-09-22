@@ -7,3 +7,7 @@ export type TokenPayload = {
 export type RequestWithUser = Request & {
   user?: number;
 };
+
+export type AuthenticatedRequest = RequestWithUser & {
+  user: number;
+};

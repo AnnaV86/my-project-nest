@@ -4,13 +4,13 @@ import { JwtService } from '@nestjs/jwt';
 import {
   TEST_REFRESH_SECRET,
   testJwtOptions,
-} from '../../test/helpers/auth.js';
+} from '../../../test/helpers/auth.js';
 import {
   createUserFixture,
   createUsersRepositoryMock,
-} from '../../test/helpers/users.js';
+} from '../../../test/helpers/users.js';
+import type { RequestWithUser } from '../types.js';
 import { AuthGuard } from './auth.guard.js';
-import type { RequestWithUser } from './types.js';
 
 describe('AuthGuard', () => {
   let repository: ReturnType<typeof createUsersRepositoryMock>;
@@ -43,32 +43,35 @@ describe('AuthGuard', () => {
   it.each([undefined, '', 'Bearer', 'Bearer ', 'Basic abc'])(
     'Возвращает 401 при отсутствии Bearer-токена: %j',
     async (header) => {
-      const { context } = createContext(header);
+      const { request, context } = createContext(header);
 
       await expect(guard.canActivate(context)).rejects.toThrow(
         UnauthorizedException,
       );
       expect(repository.findById).not.toHaveBeenCalled();
+      expect(request.user).toBeUndefined();
     },
   );
 
   it('Отклоняет повреждённый токен', async () => {
-    const { context } = createContext('Bearer not-a-jwt');
+    const { request, context } = createContext('Bearer not-a-jwt');
 
     await expect(guard.canActivate(context)).rejects.toThrow(
       UnauthorizedException,
     );
     expect(repository.findById).not.toHaveBeenCalled();
+    expect(request.user).toBeUndefined();
   });
 
   it('Возвращает 401, если срок access-токена истёк', async () => {
     const token = await jwt.signAsync({ sub: '1' }, { expiresIn: -1 });
-    const { context } = createContext(`Bearer ${token}`);
+    const { request, context } = createContext(`Bearer ${token}`);
 
     await expect(guard.canActivate(context)).rejects.toThrow(
       UnauthorizedException,
     );
     expect(repository.findById).not.toHaveBeenCalled();
+    expect(request.user).toBeUndefined();
   });
 
   it('Отклоняет refresh-токен в заголовке Authorization', async () => {
@@ -76,12 +79,13 @@ describe('AuthGuard', () => {
       { sub: '1' },
       { secret: TEST_REFRESH_SECRET },
     );
-    const { context } = createContext(`Bearer ${token}`);
+    const { request, context } = createContext(`Bearer ${token}`);
 
     await expect(guard.canActivate(context)).rejects.toThrow(
       UnauthorizedException,
     );
     expect(repository.findById).not.toHaveBeenCalled();
+    expect(request.user).toBeUndefined();
   });
 
   it.each([
@@ -96,31 +100,34 @@ describe('AuthGuard', () => {
     '9007199254740992',
   ])('Отклоняет некорректный id в токене: %j', async (sub) => {
     const token = await jwt.signAsync({ sub });
-    const { context } = createContext(`Bearer ${token}`);
+    const { request, context } = createContext(`Bearer ${token}`);
 
     await expect(guard.canActivate(context)).rejects.toThrow(
       UnauthorizedException,
     );
     expect(repository.findById).not.toHaveBeenCalled();
+    expect(request.user).toBeUndefined();
   });
 
   it('Запрещает доступ отсутствующему или удалённому пользователю', async () => {
     repository.findById.mockResolvedValue(null);
     const token = await jwt.signAsync({ sub: '1' });
-    const { context } = createContext(`Bearer ${token}`);
+    const { request, context } = createContext(`Bearer ${token}`);
 
     await expect(guard.canActivate(context)).rejects.toThrow(
       UnauthorizedException,
     );
     expect(repository.findById).toHaveBeenCalledExactlyOnceWith(1);
+    expect(request.user).toBeUndefined();
   });
 
   it('Передаёт ошибку БД без изменений', async () => {
     const error = new Error('БД недоступна');
     repository.findById.mockRejectedValue(error);
     const token = await jwt.signAsync({ sub: '1' });
-    const { context } = createContext(`Bearer ${token}`);
+    const { request, context } = createContext(`Bearer ${token}`);
 
     await expect(guard.canActivate(context)).rejects.toBe(error);
+    expect(request.user).toBeUndefined();
   });
 });

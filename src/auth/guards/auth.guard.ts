@@ -6,9 +6,9 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Request } from 'express';
-import { ERRORS_MESSAGE } from '../common/error-messages.js';
-import { UsersRepository } from '../users/users.repository.js';
-import { RequestWithUser, TokenPayload } from './types.js';
+import { ERRORS_MESSAGE } from '../../common/error-messages.js';
+import { UsersRepository } from '../../users/repositories/users.repository.js';
+import { RequestWithUser, TokenPayload } from '../types.js';
 
 /** Проверяет заголовок Authorization, и добавляет  request.user = userId, для дальнейшей обработки */
 
@@ -27,7 +27,7 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException();
     }
 
-    let userId;
+    let userId: number;
     try {
       const payload = await this.jwtService.verifyAsync<TokenPayload>(token);
 
@@ -42,8 +42,6 @@ export class AuthGuard implements CanActivate {
       if (!isValid) {
         throw new UnauthorizedException();
       }
-
-      request['user'] = userId;
     } catch {
       throw new UnauthorizedException();
     }

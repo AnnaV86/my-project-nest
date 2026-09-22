@@ -6,8 +6,6 @@ import {
   HttpCode,
   HttpStatus,
   Patch,
-  Req,
-  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -21,12 +19,13 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { AuthGuard } from '../auth/auth.guard.js';
-import type { RequestWithUser } from '../auth/types.js';
-import { ERRORS_MESSAGE } from '../common/error-messages.js';
-import { ProfileResponseDto } from './dto/profile-response.dto.js';
-import { UpdateProfileDto } from './dto/update-user.dto.js';
-import { UsersService } from './users.service.js';
+import { AuthGuard } from '../../auth/guards/auth.guard.js';
+import { ERRORS_MESSAGE } from '../../common/error-messages.js';
+import { CurrentUserId } from '../decorators/current-user-id.decorator.js';
+import { ProfileResponseDto } from '../dto/profile-response.dto.js';
+import { UpdateProfileDto } from '../dto/update-user.dto.js';
+import { UserConflictResponseDto } from '../dto/user-conflict-response.dto.js';
+import { UsersService } from '../services/users.service.js';
 
 @ApiTags('profile')
 @ApiBearerAuth()
@@ -46,12 +45,8 @@ export class ProfileController {
   @ApiNotFoundResponse({ description: ERRORS_MESSAGE.USER_NOT_FOUND })
   @Get('my')
   @UseGuards(AuthGuard)
-  getUsers(@Req() request: RequestWithUser) {
-    if (!request.user) {
-      throw new UnauthorizedException();
-    }
-
-    return this.userService.getProfile(request.user);
+  getUsers(@CurrentUserId() userId: number) {
+    return this.userService.getProfile(userId);
   }
 
   /**Изменение профиля */
@@ -64,18 +59,17 @@ export class ProfileController {
     description: 'Некорректные данные, пустой запрос или null в полях',
   })
   @ApiNotFoundResponse({ description: ERRORS_MESSAGE.USER_NOT_FOUND })
-  @ApiConflictResponse({ description: ERRORS_MESSAGE.DOUBLE })
+  @ApiConflictResponse({
+    description: 'Email или логин уже используется; поле указано в field',
+    type: UserConflictResponseDto,
+  })
   @Patch('update')
   @UseGuards(AuthGuard)
   updateProfile(
-    @Req() request: RequestWithUser,
+    @CurrentUserId() userId: number,
     @Body() dto: UpdateProfileDto,
   ) {
-    if (!request.user) {
-      throw new UnauthorizedException();
-    }
-
-    return this.userService.updateProfile(dto, request.user);
+    return this.userService.updateProfile(dto, userId);
   }
 
   /**Удаление профиля */
@@ -87,11 +81,7 @@ export class ProfileController {
   @Delete('delete')
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(AuthGuard)
-  deleteProfile(@Req() request: RequestWithUser): Promise<void> {
-    if (!request.user) {
-      throw new UnauthorizedException();
-    }
-
-    return this.userService.deleteProfile(request.user);
+  deleteProfile(@CurrentUserId() userId: number): Promise<void> {
+    return this.userService.deleteProfile(userId);
   }
 }

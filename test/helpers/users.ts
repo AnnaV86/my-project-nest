@@ -1,7 +1,7 @@
 import { vi } from 'vitest';
 import type { CreateUserDto } from '../../src/users/dto/create-user.dto.js';
-import type { User } from '../../src/users/users.entity.js';
-import type { UsersRepository } from '../../src/users/users.repository.js';
+import type { User } from '../../src/users/entities/users.entity.js';
+import type { UsersRepository } from '../../src/users/repositories/users.repository.js';
 
 export const registrationData = {
   login: 'Anna',

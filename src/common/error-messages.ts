@@ -6,4 +6,6 @@ export enum ERRORS_MESSAGE {
   NOT_NULL_PROFILE_FIELDS = 'Поля профиля не могут быть null',
   DELETED_USER = 'Данный пользователь удален',
   DATA_NOT_VALID = 'Переданы некорректные данные',
+  EMAIL_ALREADY_EXISTS = 'Этот email уже используется',
+  LOGIN_ALREADY_EXISTS = 'Этот логин уже используется',
 }

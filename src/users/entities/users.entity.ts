@@ -3,15 +3,18 @@ import {
   DeleteDateColumn,
   Entity,
   PrimaryGeneratedColumn,
+  Unique,
 } from 'typeorm';
 /**Схема user для БД */
 @Entity('users')
+@Unique('UQ_users_login', ['login'])
+@Unique('UQ_users_email', ['email'])
 export class User {
   @PrimaryGeneratedColumn({ type: 'integer' })
   id: number;
-  @Column({ type: 'varchar', unique: true })
+  @Column({ type: 'varchar' })
   login: string;
-  @Column({ type: 'varchar', unique: true })
+  @Column({ type: 'varchar' })
   email: string;
   @Column({ type: 'text' })
   passwordHash: string;

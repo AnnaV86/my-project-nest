@@ -1,14 +1,12 @@
-import {
-  BadRequestException,
-  ConflictException,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import bcrypt from 'bcrypt';
 import { plainToInstance } from 'class-transformer';
 import { QueryFailedError } from 'typeorm';
-import { ERRORS_MESSAGE } from '../common/error-messages.js';
-import { UpdateProfileDto } from './dto/update-user.dto.js';
-import { UsersRepository } from './users.repository.js';
+import { userConflictCases } from '../../../test/helpers/user-conflicts.js';
+import { ERRORS_MESSAGE } from '../../common/error-messages.js';
+import { UpdateProfileDto } from '../dto/update-user.dto.js';
+import { UsersRepository } from '../repositories/users.repository.js';
 import { UsersService } from './users.service.js';
 
 const repository = {
@@ -40,100 +38,182 @@ const mockDataDouble = {
 };
 
 describe('UsersService', () => {
+  let config: ConfigService;
+
   beforeEach(() => {
     vi.resetAllMocks();
+    config = new ConfigService({ BCRYPT_ROUNDS: '4' });
+    repository.findByEmail.mockResolvedValue(null);
+    repository.findByLogin.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   describe('register', () => {
     it('Отклоняет регистрацию, если email занят', async () => {
       repository.findByEmail.mockResolvedValue(mockSavedData);
 
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
 
       const result = service.register({
         ...mockDataDouble,
         email: 'anna@example.com',
       });
 
-      await expect(result).rejects.toThrow(ConflictException);
+      await expect(result).rejects.toMatchObject({
+        status: 409,
+        response: {
+          statusCode: 409,
+          error: 'Conflict',
+          field: 'email',
+          message: ERRORS_MESSAGE.EMAIL_ALREADY_EXISTS,
+        },
+      });
+      expect(repository.findByEmail).toHaveBeenCalledExactlyOnceWith(
+        'anna@example.com',
+      );
+      expect(repository.findByLogin).not.toHaveBeenCalled();
       expect(repository.create).not.toHaveBeenCalled();
     });
 
     it('Отклоняет регистрацию, если login занят', async () => {
-      repository.findByEmail.mockResolvedValue(null);
       repository.findByLogin.mockResolvedValue(mockSavedData);
 
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
 
       const result = service.register({
         ...mockDataDouble,
         login: 'Anna',
       });
 
-      await expect(result).rejects.toThrow(ConflictException);
+      await expect(result).rejects.toMatchObject({
+        status: 409,
+        response: {
+          statusCode: 409,
+          error: 'Conflict',
+          field: 'login',
+          message: ERRORS_MESSAGE.LOGIN_ALREADY_EXISTS,
+        },
+      });
+      expect(repository.findByEmail).toHaveBeenCalledExactlyOnceWith(
+        mockDataDouble.email,
+      );
+      expect(repository.findByLogin).toHaveBeenCalledExactlyOnceWith('Anna');
       expect(repository.create).not.toHaveBeenCalled();
     });
 
-    it('При свободных email и логине пользователь сохраняется с правильными данными', async () => {
-      repository.findByEmail.mockResolvedValue(null);
-      repository.findByLogin.mockResolvedValue(null);
-      repository.create.mockImplementation((data) =>
-        Promise.resolve({
-          ...data,
-          id: 1,
-        }),
+    it.each(['4', '5'])(
+      'При свободных email и логине сохраняет пользователя с BCRYPT_ROUNDS=%s из конфигурации',
+      async (rounds) => {
+        config = new ConfigService({ BCRYPT_ROUNDS: rounds });
+        repository.create.mockImplementation((data) =>
+          Promise.resolve({
+            ...data,
+            id: 1,
+          }),
+        );
+
+        const { password: _password, ...expectedProfile } = mockDataDouble;
+        const service = new UsersService(repository, config);
+
+        const result = await service.register(mockDataDouble);
+
+        expect(result).toEqual({ ...expectedProfile, id: 1, deleted: null });
+        expect(repository.findByEmail).toHaveBeenCalledExactlyOnceWith(
+          mockDataDouble.email,
+        );
+        expect(repository.findByLogin).toHaveBeenCalledExactlyOnceWith(
+          mockDataDouble.login,
+        );
+        expect(repository.create).toHaveBeenCalledTimes(1);
+
+        const savedData = repository.create.mock.calls[0][0];
+
+        expect(savedData).toMatchObject({
+          ...expectedProfile,
+          deleted: null,
+        });
+
+        expect(savedData).not.toHaveProperty('password');
+        expect(bcrypt.getRounds(savedData.passwordHash)).toBe(Number(rounds));
+
+        await expect(
+          bcrypt.compare(mockDataDouble.password, savedData.passwordHash),
+        ).resolves.toBe(true);
+      },
+    );
+
+    it.each(['abc', '', ' ', '3', '32', '4.5', 'Infinity'])(
+      'Не сохраняет пользователя при некорректном BCRYPT_ROUNDS=%j',
+      async (rounds) => {
+        const config = new ConfigService({ BCRYPT_ROUNDS: rounds });
+        const service = new UsersService(repository, config);
+
+        await expect(service.register(mockDataDouble)).rejects.toThrow(
+          'BCRYPT_ROUNDS должен быть целым числом от 4 до 31',
+        );
+        expect(repository.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it('Не сохраняет пользователя, если BCRYPT_ROUNDS отсутствует', async () => {
+      vi.stubEnv('BCRYPT_ROUNDS', undefined);
+      const service = new UsersService(repository, new ConfigService());
+
+      await expect(service.register(mockDataDouble)).rejects.toThrow(
+        'BCRYPT_ROUNDS',
       );
-
-      const { password: _password, ...expectedProfile } = mockDataDouble;
-      const service = new UsersService(repository);
-
-      const result = await service.register(mockDataDouble);
-
-      expect(result).toEqual({ ...expectedProfile, id: 1, deleted: null });
-      expect(repository.create).toHaveBeenCalledTimes(1);
-
-      const savedData = repository.create.mock.calls[0][0];
-
-      expect(savedData).toMatchObject({
-        ...expectedProfile,
-        deleted: null,
-      });
-
-      expect(savedData).not.toHaveProperty('password');
-
-      await expect(
-        bcrypt.compare(mockDataDouble.password, savedData.passwordHash),
-      ).resolves.toBe(true);
+      expect(repository.create).not.toHaveBeenCalled();
     });
 
-    it('Возвращает конфликт при нарушении уникальности в БД', async () => {
-      repository.findByEmail.mockResolvedValue(null);
-      repository.findByLogin.mockResolvedValue(null);
+    it.each(userConflictCases)(
+      'Указывает поле $field при конфликте сохранения после успешных предварительных проверок',
+      async ({ field, constraint, message }) => {
+        const driverError = Object.assign(new Error('Duplicate user'), {
+          code: '23505',
+          constraint,
+        });
+        repository.create.mockRejectedValue(
+          new QueryFailedError('', [], driverError),
+        );
+        const service = new UsersService(repository, config);
 
-      const driverError = Object.assign(new Error('Duplicate email'), {
-        code: '23505',
-      });
-      const databaseError = new QueryFailedError('', [], driverError);
+        await expect(service.register(mockDataDouble)).rejects.toMatchObject({
+          status: 409,
+          response: { statusCode: 409, error: 'Conflict', field, message },
+        });
+        expect(repository.findByEmail).toHaveBeenCalledExactlyOnceWith(
+          mockDataDouble.email,
+        );
+        expect(repository.findByLogin).toHaveBeenCalledExactlyOnceWith(
+          mockDataDouble.login,
+        );
+        expect(repository.create).toHaveBeenCalledTimes(1);
+      },
+    );
 
-      repository.create.mockRejectedValue(databaseError);
+    it.each([
+      { code: '23505' },
+      { code: '23505', constraint: 'UQ_unknown' },
+      { code: '08006', constraint: 'UQ_users_email' },
+    ])('Не маскирует неизвестную ошибку БД: %j', async (details) => {
+      const driverError = Object.assign(new Error('Database error'), details);
+      const error = new QueryFailedError('', [], driverError);
+      repository.create.mockRejectedValue(error);
+      const service = new UsersService(repository, config);
 
-      const service = new UsersService(repository);
-
-      const result = service.register(mockDataDouble);
-
-      await expect(result).rejects.toThrow(ConflictException);
+      await expect(service.register(mockDataDouble)).rejects.toBe(error);
       expect(repository.create).toHaveBeenCalledTimes(1);
     });
 
     it('передаёт прочую ошибку сохранения без изменений', async () => {
-      repository.findByEmail.mockResolvedValue(null);
-      repository.findByLogin.mockResolvedValue(null);
-
       const databaseError = new Error('Ошибка');
 
       repository.create.mockRejectedValue(databaseError);
 
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
 
       await expect(service.register(mockDataDouble)).rejects.toBe(
         databaseError,
@@ -146,7 +226,7 @@ describe('UsersService', () => {
     it('Возвращает ошибку если пользователь не найден', async () => {
       repository.findById.mockResolvedValue(null);
 
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
       const result = service.getProfile(3);
 
       await expect(result).rejects.toThrow(NotFoundException);
@@ -156,7 +236,7 @@ describe('UsersService', () => {
     it('Возвращает данные пользователя, без passwordHash и deleted', async () => {
       repository.findById.mockResolvedValue(mockSavedData);
 
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
       const result = await service.getProfile(1);
 
       const {
@@ -184,7 +264,7 @@ describe('UsersService', () => {
         description: '',
       });
 
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
       const dto = { login: 'NewAnna', age: 0, description: '' };
       const result = await service.updateProfile(dto, 1);
 
@@ -199,38 +279,54 @@ describe('UsersService', () => {
       });
     });
 
-    it('Сохраняет хеш нового пароля, а не исходный пароль', async () => {
-      repository.updateProfile.mockResolvedValue({
-        affected: 1,
-        raw: [],
-        generatedMaps: [],
-      });
-      repository.findById.mockResolvedValue(mockSavedData);
+    it.each(['4', '5'])(
+      'Сохраняет хеш нового пароля с BCRYPT_ROUNDS=%s из конфигурации',
+      async (rounds) => {
+        config = new ConfigService({ BCRYPT_ROUNDS: rounds });
+        repository.updateProfile.mockResolvedValue({
+          affected: 1,
+          raw: [],
+          generatedMaps: [],
+        });
+        repository.findById.mockResolvedValue(mockSavedData);
 
-      const service = new UsersService(repository);
-      const password = 'NewPassword123!';
-      const result = await service.updateProfile({ password }, 1);
+        const service = new UsersService(repository, config);
+        const password = 'NewPassword123!';
+        const result = await service.updateProfile({ password }, 1);
 
-      expect(repository.updateProfile).toHaveBeenCalledTimes(1);
-      const [data, userId] = repository.updateProfile.mock.calls[0];
+        expect(repository.updateProfile).toHaveBeenCalledTimes(1);
+        const [data, userId] = repository.updateProfile.mock.calls[0];
 
-      expect(userId).toBe(1);
-      expect(data).not.toHaveProperty('password');
-      expect(data.passwordHash).toBeTypeOf('string');
-      if (typeof data.passwordHash !== 'string') {
-        throw new Error('Репозиторий не получил хеш пароля');
-      }
-      await expect(bcrypt.compare(password, data.passwordHash)).resolves.toBe(
-        true,
-      );
-      expect(result).not.toHaveProperty('passwordHash');
-      expect(result).not.toHaveProperty('password');
+        expect(userId).toBe(1);
+        expect(data).not.toHaveProperty('password');
+        expect(data.passwordHash).toBeTypeOf('string');
+        if (typeof data.passwordHash !== 'string') {
+          throw new Error('Репозиторий не получил хеш пароля');
+        }
+        expect(bcrypt.getRounds(data.passwordHash)).toBe(Number(rounds));
+        await expect(bcrypt.compare(password, data.passwordHash)).resolves.toBe(
+          true,
+        );
+        expect(result).not.toHaveProperty('passwordHash');
+        expect(result).not.toHaveProperty('password');
+      },
+    );
+
+    it('Не обновляет пароль при некорректном BCRYPT_ROUNDS', async () => {
+      const config = new ConfigService({ BCRYPT_ROUNDS: 'abc' });
+      const service = new UsersService(repository, config);
+
+      await expect(
+        service.updateProfile({ password: 'NewPassword123!' }, 1),
+      ).rejects.toThrow('BCRYPT_ROUNDS должен быть целым числом от 4 до 31');
+      expect(repository.updateProfile).not.toHaveBeenCalled();
+      expect(repository.findById).not.toHaveBeenCalled();
     });
 
     it.each([{}, { login: undefined }])(
       'Отклоняет обновление без данных: %j',
       async (dto) => {
-        const service = new UsersService(repository);
+        const service = new UsersService(repository, config);
 
         await expect(service.updateProfile(dto, 1)).rejects.toThrow(
           new BadRequestException(ERRORS_MESSAGE.UPDATE_DATA_NOT_FOUND),
@@ -243,7 +339,7 @@ describe('UsersService', () => {
       'Отклоняет null в поле %s',
       async (field) => {
         const dto = plainToInstance(UpdateProfileDto, { [field]: null });
-        const service = new UsersService(repository);
+        const service = new UsersService(repository, config);
 
         await expect(service.updateProfile(dto, 1)).rejects.toThrow(
           new BadRequestException(ERRORS_MESSAGE.NOT_NULL_PROFILE_FIELDS),
@@ -258,7 +354,7 @@ describe('UsersService', () => {
         raw: [],
         generatedMaps: [],
       });
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
 
       await expect(service.updateProfile({ age: 30 }, 99)).rejects.toThrow(
         NotFoundException,
@@ -266,20 +362,30 @@ describe('UsersService', () => {
       expect(repository.findById).not.toHaveBeenCalled();
     });
 
-    it('Преобразует нарушение уникальности в конфликт', async () => {
-      const driverError = Object.assign(new Error('Duplicate login'), {
-        code: '23505',
-      });
-      repository.updateProfile.mockRejectedValue(
-        new QueryFailedError('', [], driverError),
-      );
-      const service = new UsersService(repository);
+    it.each(userConflictCases)(
+      'Указывает поле $field при нарушении уникальности во время обновления',
+      async ({ field, constraint, message }) => {
+        const driverError = Object.assign(new Error('Duplicate user'), {
+          code: '23505',
+          constraint,
+        });
+        repository.updateProfile.mockRejectedValue(
+          new QueryFailedError('', [], driverError),
+        );
+        const service = new UsersService(repository, config);
+        const dto = { [field]: mockDataDouble[field] };
 
-      await expect(service.updateProfile({ login: 'Ivan' }, 1)).rejects.toThrow(
-        ConflictException,
-      );
-      expect(repository.findById).not.toHaveBeenCalled();
-    });
+        await expect(service.updateProfile(dto, 1)).rejects.toMatchObject({
+          status: 409,
+          response: { statusCode: 409, error: 'Conflict', field, message },
+        });
+        expect(repository.updateProfile).toHaveBeenCalledExactlyOnceWith(
+          dto,
+          1,
+        );
+        expect(repository.findById).not.toHaveBeenCalled();
+      },
+    );
 
     it('Передаёт другую ошибку БД без изменений', async () => {
       const driverError = Object.assign(new Error('Connection error'), {
@@ -287,7 +393,7 @@ describe('UsersService', () => {
       });
       const error = new QueryFailedError('', [], driverError);
       repository.updateProfile.mockRejectedValue(error);
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
 
       await expect(service.updateProfile({ age: 30 }, 1)).rejects.toBe(error);
     });
@@ -300,7 +406,7 @@ describe('UsersService', () => {
         raw: [],
         generatedMaps: [],
       });
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
 
       await expect(service.deleteProfile(1)).resolves.toBeUndefined();
       expect(repository.deleteProfile).toHaveBeenCalledExactlyOnceWith(1);
@@ -312,7 +418,7 @@ describe('UsersService', () => {
         raw: [],
         generatedMaps: [],
       });
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
 
       await expect(service.deleteProfile(99)).rejects.toThrow(
         NotFoundException,
@@ -322,7 +428,7 @@ describe('UsersService', () => {
     it('Передаёт ошибку удаления без изменений', async () => {
       const error = new Error('Не удалось удалить пользователя');
       repository.deleteProfile.mockRejectedValue(error);
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
 
       await expect(service.deleteProfile(1)).rejects.toBe(error);
     });
@@ -342,7 +448,7 @@ describe('UsersService', () => {
 
       repository.findAll.mockResolvedValue([[mockSavedData, secondUser], 2]);
 
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
       const result = await service.getUsers({ page: 1 });
 
       expect(repository.findAll).toHaveBeenCalledExactlyOnceWith({
@@ -374,7 +480,7 @@ describe('UsersService', () => {
     it('Передаёт поиск по логину вместе с пагинацией', async () => {
       repository.findAll.mockResolvedValue([[], 0]);
 
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
 
       await service.getUsers({
         page: 2,
@@ -393,7 +499,7 @@ describe('UsersService', () => {
     it('Запрашивает первую страницу со смещением 0', async () => {
       repository.findAll.mockResolvedValue([[mockSavedData], 1]);
 
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
 
       await service.getUsers({ page: 1, limit: 10 });
 
@@ -407,7 +513,7 @@ describe('UsersService', () => {
     it('Вычисляет смещение страницы и сохраняет общее количество из репозитория', async () => {
       repository.findAll.mockResolvedValue([[mockSavedData], 21]);
 
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
       const result = await service.getUsers({ page: 3, limit: 10 });
 
       expect(repository.findAll).toHaveBeenCalledExactlyOnceWith({
@@ -419,10 +525,41 @@ describe('UsersService', () => {
       expect(result.total).toBe(21);
     });
 
+    it('Принимает большой номер страницы с безопасным смещением', async () => {
+      repository.findAll.mockResolvedValue([[], 0]);
+      const service = new UsersService(repository, config);
+
+      await service.getUsers({ page: Number.MAX_SAFE_INTEGER, limit: 1 });
+
+      expect(repository.findAll).toHaveBeenCalledExactlyOnceWith({
+        offset: Number.MAX_SAFE_INTEGER - 1,
+        limit: 1,
+        age: undefined,
+        login: undefined,
+      });
+      const [options] = repository.findAll.mock.calls[0];
+      expect(Number.isSafeInteger(options.offset)).toBe(true);
+    });
+
+    it.each([
+      { page: Number.MAX_SAFE_INTEGER, limit: 2 },
+      { page: 1e308, limit: 100 },
+    ])(
+      'Отклоняет небезопасное смещение до обращения к репозиторию: %j',
+      async (query) => {
+        const service = new UsersService(repository, config);
+
+        await expect(service.getUsers(query)).rejects.toThrow(
+          new BadRequestException(ERRORS_MESSAGE.DATA_NOT_VALID),
+        );
+        expect(repository.findAll).not.toHaveBeenCalled();
+      },
+    );
+
     it('Передаёт фильтр возраста 0 без пагинации', async () => {
       repository.findAll.mockResolvedValue([[], 0]);
 
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
 
       await service.getUsers({ page: 1, age: 0 });
 
@@ -436,7 +573,7 @@ describe('UsersService', () => {
     it('Передаёт фильтр возраста вместе с пагинацией', async () => {
       repository.findAll.mockResolvedValue([[mockSavedData], 6]);
 
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
 
       await service.getUsers({ page: 2, limit: 5, age: 25 });
 
@@ -450,7 +587,7 @@ describe('UsersService', () => {
     it('Не применяет пагинацию, если передана только страница без limit', async () => {
       repository.findAll.mockResolvedValue([[mockSavedData], 1]);
 
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
 
       await service.getUsers({ page: 3 });
 
@@ -464,7 +601,7 @@ describe('UsersService', () => {
     it('Возвращает пустой список и total 0, если пользователей нет', async () => {
       repository.findAll.mockResolvedValue([[], 0]);
 
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
       const result = await service.getUsers({ page: 1 });
 
       expect(result).toEqual({ items: [], total: 0 });
@@ -473,7 +610,7 @@ describe('UsersService', () => {
     it('Сохраняет total, если запрошенная страница пуста', async () => {
       repository.findAll.mockResolvedValue([[], 12]);
 
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
       const result = await service.getUsers({ page: 3, limit: 10 });
 
       expect(result).toEqual({ items: [], total: 12 });
@@ -484,7 +621,7 @@ describe('UsersService', () => {
 
       repository.findAll.mockRejectedValue(databaseError);
 
-      const service = new UsersService(repository);
+      const service = new UsersService(repository, config);
 
       await expect(service.getUsers({ page: 1 })).rejects.toBe(databaseError);
     });

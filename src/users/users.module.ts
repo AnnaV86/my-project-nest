@@ -1,11 +1,11 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ProfileController } from './profile.controller.js';
-import { TypeOrmUsersRepository } from './typeorm-users.repository.js';
-import { UserController } from './users.controller.js';
-import { User } from './users.entity.js';
-import { UsersRepository } from './users.repository.js';
-import { UsersService } from './users.service.js';
+import { ProfileController } from './controllers/profile.controller.js';
+import { UserController } from './controllers/users.controller.js';
+import { User } from './entities/users.entity.js';
+import { TypeOrmUsersRepository } from './repositories/typeorm-users.repository.js';
+import { UsersRepository } from './repositories/users.repository.js';
+import { UsersService } from './services/users.service.js';
 
 @Module({
   providers: [

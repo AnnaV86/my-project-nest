@@ -2,22 +2,25 @@ import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import bcrypt from 'bcrypt';
+import { createHash } from 'node:crypto';
 import {
   TEST_REFRESH_SECRET,
   testJwtOptions,
-} from '../../test/helpers/auth.js';
+} from '../../../test/helpers/auth.js';
+import { createRefreshSessionsRepositoryMock } from '../../../test/helpers/refresh-sessions.js';
 import {
   createUserFixture,
   createUsersRepositoryMock,
   registrationData,
-} from '../../test/helpers/users.js';
-import { UsersService } from '../users/users.service.js';
+} from '../../../test/helpers/users.js';
+import { UsersService } from '../../users/services/users.service.js';
 import { AuthService } from './auth.service.js';
 
 type SignedPayload = { sub: string; iat: number; exp: number; jti?: string };
 
 describe('AuthService', () => {
   let repository: ReturnType<typeof createUsersRepositoryMock>;
+  let sessionRepository: ReturnType<typeof createRefreshSessionsRepositoryMock>;
   let usersService: UsersService;
   let jwt: JwtService;
   let service: AuthService;
@@ -29,12 +32,20 @@ describe('AuthService', () => {
 
   beforeEach(() => {
     repository = createUsersRepositoryMock();
-    usersService = new UsersService(repository);
+    sessionRepository = createRefreshSessionsRepositoryMock();
     jwt = new JwtService(testJwtOptions);
     const config = new ConfigService({
+      BCRYPT_ROUNDS: '4',
       JWT_REFRESH_SECRET: TEST_REFRESH_SECRET,
     });
-    service = new AuthService(usersService, jwt, config, repository);
+    usersService = new UsersService(repository, config);
+    service = new AuthService(
+      usersService,
+      jwt,
+      config,
+      repository,
+      sessionRepository,
+    );
   });
 
   afterEach(() => {
@@ -62,6 +73,19 @@ describe('AuthService', () => {
     ).rejects.toThrow();
   }
 
+  async function expectSessionCreated(refreshToken: string) {
+    const payload = await jwt.verifyAsync<SignedPayload>(refreshToken, {
+      secret: TEST_REFRESH_SECRET,
+    });
+
+    expect(sessionRepository.create).toHaveBeenCalledExactlyOnceWith({
+      userId: 1,
+      tokenHash: createHash('sha256').update(refreshToken).digest('hex'),
+      expiresAt: new Date(payload.exp * 1000),
+    });
+    expect(sessionRepository.rotate).not.toHaveBeenCalled();
+  }
+
   describe('register', () => {
     it('Передаёт данные регистрации и выдаёт два токена для созданного пользователя', async () => {
       const register = vi
@@ -76,6 +100,7 @@ describe('AuthService', () => {
         'refresh_token',
       ]);
       await expectTokens(result);
+      await expectSessionCreated(result.refresh_token);
     });
 
     it('При ошибке регистрации не выдаёт токены и передаёт ошибку', async () => {
@@ -85,6 +110,15 @@ describe('AuthService', () => {
 
       await expect(service.register(registrationData)).rejects.toBe(error);
       expect(sign).not.toHaveBeenCalled();
+      expect(sessionRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('Не возвращает токены, если сессию не удалось сохранить', async () => {
+      vi.spyOn(usersService, 'register').mockResolvedValue(createUserFixture());
+      const error = new Error('Сессия не сохранена');
+      sessionRepository.create.mockRejectedValue(error);
+
+      await expect(service.register(registrationData)).rejects.toBe(error);
     });
   });
 
@@ -101,6 +135,7 @@ describe('AuthService', () => {
 
       expect(repository.findByLogin).toHaveBeenCalledExactlyOnceWith('Anna');
       await expectTokens(result);
+      await expectSessionCreated(result.refresh_token);
     });
 
     it('Возвращает 401 для неизвестного логина и не выдаёт токены', async () => {
@@ -111,6 +146,7 @@ describe('AuthService', () => {
         UnauthorizedException,
       );
       expect(sign).not.toHaveBeenCalled();
+      expect(sessionRepository.create).not.toHaveBeenCalled();
     });
 
     it('Возвращает 401 при неверном пароле и не выдаёт токены', async () => {
@@ -123,6 +159,7 @@ describe('AuthService', () => {
         service.signIn({ login: 'Anna', password: 'WrongPassword' }),
       ).rejects.toThrow(UnauthorizedException);
       expect(sign).not.toHaveBeenCalled();
+      expect(sessionRepository.create).not.toHaveBeenCalled();
     });
 
     it('Не маскирует ошибку репозитория под неверный пароль', async () => {
@@ -136,6 +173,7 @@ describe('AuthService', () => {
   describe('refreshToken', () => {
     it('Проверяет refresh-токен и выдаёт новую пару для существующего пользователя', async () => {
       repository.findById.mockResolvedValue(createUserFixture());
+      sessionRepository.rotate.mockResolvedValue(true);
       const refreshToken = await jwt.signAsync(
         { sub: '1' },
         { secret: TEST_REFRESH_SECRET, jwtid: 'previous-token' },
@@ -148,6 +186,49 @@ describe('AuthService', () => {
       expect(repository.findById).toHaveBeenCalledExactlyOnceWith(1);
       expect(result.refresh_token).not.toBe(refreshToken);
       await expectTokens(result);
+      const payload = await jwt.verifyAsync<SignedPayload>(
+        result.refresh_token,
+        { secret: TEST_REFRESH_SECRET },
+      );
+      expect(sessionRepository.rotate).toHaveBeenCalledExactlyOnceWith({
+        userId: 1,
+        previousTokenHash: createHash('sha256')
+          .update(refreshToken)
+          .digest('hex'),
+        tokenHash: createHash('sha256')
+          .update(result.refresh_token)
+          .digest('hex'),
+        expiresAt: new Date(payload.exp * 1000),
+      });
+      expect(sessionRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('Возвращает 401, если действующая сессия не найдена или токен уже использован', async () => {
+      repository.findById.mockResolvedValue(createUserFixture());
+      const token = await jwt.signAsync(
+        { sub: '1' },
+        { secret: TEST_REFRESH_SECRET },
+      );
+
+      await expect(
+        service.refreshToken({ refresh_token: token }),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(sessionRepository.rotate).toHaveBeenCalledTimes(1);
+      expect(sessionRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('Не маскирует ошибку БД при обновлении сессии под 401', async () => {
+      repository.findById.mockResolvedValue(createUserFixture());
+      const error = new Error('БД недоступна');
+      sessionRepository.rotate.mockRejectedValue(error);
+      const token = await jwt.signAsync(
+        { sub: '1' },
+        { secret: TEST_REFRESH_SECRET },
+      );
+
+      await expect(service.refreshToken({ refresh_token: token })).rejects.toBe(
+        error,
+      );
     });
 
     it('Отклоняет истёкший refresh-токен', async () => {
@@ -160,6 +241,7 @@ describe('AuthService', () => {
         service.refreshToken({ refresh_token: token }),
       ).rejects.toThrow(UnauthorizedException);
       expect(repository.findById).not.toHaveBeenCalled();
+      expect(sessionRepository.rotate).not.toHaveBeenCalled();
     });
 
     it('Отклоняет access-токен вместо refresh-токена', async () => {
@@ -169,6 +251,7 @@ describe('AuthService', () => {
         service.refreshToken({ refresh_token: token }),
       ).rejects.toThrow(UnauthorizedException);
       expect(repository.findById).not.toHaveBeenCalled();
+      expect(sessionRepository.rotate).not.toHaveBeenCalled();
     });
 
     it('Отклоняет повреждённый токен', async () => {
@@ -176,6 +259,7 @@ describe('AuthService', () => {
         service.refreshToken({ refresh_token: 'not-a-jwt' }),
       ).rejects.toThrow(UnauthorizedException);
       expect(repository.findById).not.toHaveBeenCalled();
+      expect(sessionRepository.rotate).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -198,6 +282,7 @@ describe('AuthService', () => {
         service.refreshToken({ refresh_token: token }),
       ).rejects.toThrow(UnauthorizedException);
       expect(repository.findById).not.toHaveBeenCalled();
+      expect(sessionRepository.rotate).not.toHaveBeenCalled();
     });
 
     it('Не выдаёт новые токены для отсутствующего или удалённого пользователя', async () => {
@@ -213,6 +298,7 @@ describe('AuthService', () => {
       ).rejects.toThrow(UnauthorizedException);
       expect(repository.findById).toHaveBeenCalledExactlyOnceWith(1);
       expect(sign).not.toHaveBeenCalled();
+      expect(sessionRepository.rotate).not.toHaveBeenCalled();
     });
   });
 });

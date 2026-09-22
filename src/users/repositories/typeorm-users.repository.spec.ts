@@ -1,7 +1,7 @@
-import { DataSource, IsNull, Repository } from 'typeorm';
-import { createUserFixture } from '../../test/helpers/users.js';
+import { DataSource, ILike, IsNull, Repository } from 'typeorm';
+import { createUserFixture } from '../../../test/helpers/users.js';
+import { User } from '../entities/users.entity.js';
 import { TypeOrmUsersRepository } from './typeorm-users.repository.js';
-import { User } from './users.entity.js';
 
 describe('TypeOrmUsersRepository', () => {
   let ormRepository: Repository<User>;
@@ -30,6 +30,31 @@ describe('TypeOrmUsersRepository', () => {
         order: { id: 'ASC' },
       });
     });
+
+    it.each([
+      { login: 'Ann', pattern: '%Ann%' },
+      { login: '%', pattern: '%\\%%' },
+      { login: '_', pattern: '%\\_%' },
+      { login: '\\', pattern: '%\\\\%' },
+      { login: 'ann_%\\', pattern: '%ann\\_\\%\\\\%' },
+    ])(
+      'Ищет буквальную подстроку логина $login',
+      async ({ login, pattern }) => {
+        const findAndCount = vi
+          .spyOn(ormRepository, 'findAndCount')
+          .mockResolvedValue([[], 0]);
+
+        await expect(
+          repository.findAll({ login, age: 25, offset: 10, limit: 10 }),
+        ).resolves.toEqual([[], 0]);
+        expect(findAndCount).toHaveBeenCalledExactlyOnceWith({
+          where: { age: 25, login: ILike(pattern) },
+          order: { id: 'ASC' },
+          skip: 10,
+          take: 10,
+        });
+      },
+    );
 
     it('Передаёт фильтр age 0, смещение и размер страницы в TypeORM', async () => {
       const findAndCount = vi

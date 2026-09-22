@@ -6,10 +6,11 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { ERRORS_MESSAGE } from '../common/error-messages.js';
-import { CreateUserDto } from '../users/dto/create-user.dto.js';
-import { AuthService } from './auth.service.js';
-import { TokensResponseDto } from './dto/tokens-response.dto.js';
+import { ERRORS_MESSAGE } from '../../common/error-messages.js';
+import { CreateUserDto } from '../../users/dto/create-user.dto.js';
+import { UserConflictResponseDto } from '../../users/dto/user-conflict-response.dto.js';
+import { TokensResponseDto } from '../dto/tokens-response.dto.js';
+import { AuthService } from '../services/auth.service.js';
 
 /**Регистрация нового пользователя */
 @ApiTags('auth')
@@ -27,7 +28,8 @@ export class RegistrationController {
     description: ERRORS_MESSAGE.DATA_NOT_VALID,
   })
   @ApiConflictResponse({
-    description: ERRORS_MESSAGE.DOUBLE,
+    description: 'Email или логин уже используется; поле указано в field',
+    type: UserConflictResponseDto,
   })
   create(@Body() createUserDto: CreateUserDto) {
     return this.authService.register(createUserDto);

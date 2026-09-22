@@ -1,33 +1,38 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpStatus,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import bcrypt from 'bcrypt';
 import { QueryFailedError } from 'typeorm';
-import { ERRORS_MESSAGE } from '../common/error-messages.js';
-import type { CreateUserDto } from './dto/create-user.dto.js';
-import { GetUsersQueryDto } from './dto/get-users-query.dto.js';
-import { UpdateProfileDto } from './dto/update-user.dto.js';
-import { UpdateUserData } from './types.js';
-import { UsersRepository } from './users.repository.js';
+import { ERRORS_MESSAGE } from '../../common/error-messages.js';
+import type { CreateUserDto } from '../dto/create-user.dto.js';
+import { GetUsersQueryDto } from '../dto/get-users-query.dto.js';
+import { UpdateProfileDto } from '../dto/update-user.dto.js';
+import { UsersRepository } from '../repositories/users.repository.js';
+import { UpdateUserData } from '../types.js';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly usersRepository: UsersRepository) {}
+  constructor(
+    private readonly usersRepository: UsersRepository,
+    private readonly config: ConfigService,
+  ) {}
   /**Регистрация (проверка на дубли email и логин) + хэш пароля + сохранение пользователя */
   async register(dto: CreateUserDto) {
     const userWithEmail = await this.usersRepository.findByEmail(dto.email);
-    // email занят
+
     if (userWithEmail) {
-      throw new ConflictException(ERRORS_MESSAGE.DOUBLE);
+      throw this.createConflictException('email');
     }
 
     const userWithLogin = await this.usersRepository.findByLogin(dto.login);
-    // логин занят
+
     if (userWithLogin) {
-      throw new ConflictException(ERRORS_MESSAGE.DOUBLE);
+      throw this.createConflictException('login');
     }
 
     const { password, ...user } = dto;
@@ -44,8 +49,10 @@ export class UsersService {
 
       return createdUser;
     } catch (error) {
-      if (this.isUniqueViolation(error)) {
-        throw new ConflictException(ERRORS_MESSAGE.DOUBLE);
+      const field = this.getUniqueConflictField(error);
+
+      if (field) {
+        throw this.createConflictException(field);
       }
 
       throw error;
@@ -66,6 +73,10 @@ export class UsersService {
   /**Запрос всех пользователей (с пагинацией и фильтрацией по age) */
   async getUsers({ page, limit, age, login }: GetUsersQueryDto) {
     const offset = limit !== undefined ? (page - 1) * limit : undefined;
+
+    if (offset !== undefined && !Number.isSafeInteger(offset)) {
+      throw new BadRequestException(ERRORS_MESSAGE.DATA_NOT_VALID);
+    }
 
     const [users, total] = await this.usersRepository.findAll({
       offset,
@@ -110,8 +121,10 @@ export class UsersService {
 
       return this.getProfile(userId);
     } catch (error) {
-      if (this.isUniqueViolation(error)) {
-        throw new ConflictException(ERRORS_MESSAGE.DOUBLE);
+      const field = this.getUniqueConflictField(error);
+
+      if (field) {
+        throw this.createConflictException(field);
       }
 
       throw error;
@@ -129,25 +142,56 @@ export class UsersService {
 
   /**Хэш пароля */
   private async hashPassword(password: string) {
-    const salt = await bcrypt.genSalt();
-    const hash = await bcrypt.hash(password, salt);
+    const rounds = Number(this.config.getOrThrow<string>('BCRYPT_ROUNDS'));
 
-    return hash;
+    if (!Number.isInteger(rounds) || rounds < 4 || rounds > 31) {
+      throw new Error('BCRYPT_ROUNDS должен быть целым числом от 4 до 31');
+    }
+
+    return bcrypt.hash(password, rounds);
+  }
+
+  private createConflictException(field: 'email' | 'login'): ConflictException {
+    return new ConflictException({
+      statusCode: HttpStatus.CONFLICT,
+      error: 'Conflict',
+      field,
+      message:
+        field === 'email'
+          ? ERRORS_MESSAGE.EMAIL_ALREADY_EXISTS
+          : ERRORS_MESSAGE.LOGIN_ALREADY_EXISTS,
+    });
   }
 
   /** Проверка на уникальность */
-  private isUniqueViolation(error: unknown): boolean {
+  private getUniqueConflictField(
+    error: unknown,
+  ): 'email' | 'login' | undefined {
     if (!(error instanceof QueryFailedError)) {
-      return false;
+      return undefined;
     }
 
     const driverError: unknown = error.driverError;
 
-    return (
-      typeof driverError === 'object' &&
-      driverError !== null &&
-      'code' in driverError &&
-      driverError.code === '23505'
-    );
+    if (
+      typeof driverError !== 'object' ||
+      driverError === null ||
+      !('code' in driverError) ||
+      driverError.code !== '23505' ||
+      !('constraint' in driverError)
+    ) {
+      return undefined;
+    }
+
+    switch (driverError.constraint) {
+      case 'UQ_users_email':
+        return 'email';
+
+      case 'UQ_users_login':
+        return 'login';
+
+      default:
+        return undefined;
+    }
   }
 }

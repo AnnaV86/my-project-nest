@@ -1,6 +1,14 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import {
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+} from 'class-validator';
+import { MAX_USER_AGE, MAX_USERS_LIMIT } from '../constants/user-limits.js';
 
 export class GetUsersQueryDto {
   @ApiPropertyOptional({
@@ -20,21 +28,23 @@ export class GetUsersQueryDto {
     example: 10,
     type: 'integer',
     minimum: 1,
-    maximum: 100,
+    maximum: MAX_USERS_LIMIT,
   })
   @Type(() => Number)
   @IsOptional()
   @IsInt()
-  @Max(100)
+  @Max(MAX_USERS_LIMIT)
   @Min(1)
   limit?: number;
 
   @ApiPropertyOptional({
-    description: 'Поиск по части логина без учёта регистра',
+    description: 'Поиск по буквальной части логина без учёта регистра',
     example: 'ann',
+    minLength: 1,
   })
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
   login?: string;
 
   @ApiPropertyOptional({
@@ -42,10 +52,12 @@ export class GetUsersQueryDto {
     example: 25,
     type: 'integer',
     minimum: 0,
+    maximum: MAX_USER_AGE,
   })
   @Type(() => Number)
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Max(MAX_USER_AGE)
   age?: number;
 }

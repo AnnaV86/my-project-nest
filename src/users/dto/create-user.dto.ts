@@ -1,12 +1,16 @@
 import { ApiProperty } from '@nestjs/swagger';
 import {
+  IsByteLength,
   IsEmail,
   IsInt,
   IsNotEmpty,
   IsString,
+  Max,
   MaxLength,
   Min,
+  MinLength,
 } from 'class-validator';
+import { MAX_USER_AGE } from '../constants/user-limits.js';
 
 export class CreateUserDto {
   @ApiProperty({
@@ -30,10 +34,14 @@ export class CreateUserDto {
     description: 'Пароль',
     example: 'ExamplE11!',
     format: 'password',
-    minLength: 1,
+    minLength: 8,
+    maxLength: 72,
   })
   @IsString()
   @IsNotEmpty()
+  @MinLength(8)
+  @MaxLength(72)
+  @IsByteLength(0, 72)
   password: string;
 
   @ApiProperty({
@@ -41,9 +49,11 @@ export class CreateUserDto {
     example: 25,
     type: 'integer',
     minimum: 0,
+    maximum: MAX_USER_AGE,
   })
   @IsInt()
   @Min(0)
+  @Max(MAX_USER_AGE)
   age: number;
 
   @ApiProperty({

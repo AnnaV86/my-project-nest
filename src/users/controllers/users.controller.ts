@@ -7,11 +7,11 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { AuthGuard } from '../auth/auth.guard.js';
-import { ERRORS_MESSAGE } from '../common/error-messages.js';
-import { GetUsersQueryDto } from './dto/get-users-query.dto.js';
-import { GetUsersResponseDto } from './dto/get-users-response.dto.js';
-import { UsersService } from './users.service.js';
+import { AuthGuard } from '../../auth/guards/auth.guard.js';
+import { ERRORS_MESSAGE } from '../../common/error-messages.js';
+import { GetUsersQueryDto } from '../dto/get-users-query.dto.js';
+import { GetUsersResponseDto } from '../dto/get-users-response.dto.js';
+import { UsersService } from '../services/users.service.js';
 
 @ApiTags('users')
 @ApiBearerAuth()

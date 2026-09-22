@@ -6,11 +6,11 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { ERRORS_MESSAGE } from '../common/error-messages.js';
-import { AuthService } from './auth.service.js';
-import { LoginDto } from './dto/login.dto.js';
-import { RefreshTokenDto } from './dto/refresh_token.dto.js';
-import { TokensResponseDto } from './dto/tokens-response.dto.js';
+import { ERRORS_MESSAGE } from '../../common/error-messages.js';
+import { LoginDto } from '../dto/login.dto.js';
+import { RefreshTokenDto } from '../dto/refresh_token.dto.js';
+import { TokensResponseDto } from '../dto/tokens-response.dto.js';
+import { AuthService } from '../services/auth.service.js';
 
 @ApiTags('auth')
 @Controller('auth')

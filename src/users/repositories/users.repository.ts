@@ -1,6 +1,6 @@
 import { UpdateResult } from 'typeorm';
-import { FindUsersOptions, UpdateUserData } from './types.js';
-import type { User } from './users.entity.js';
+import type { User } from '../entities/users.entity.js';
+import { FindUsersOptions, UpdateUserData } from '../types.js';
 
 export type CreateUserData = Omit<User, 'id'>;
 /**Абстрактный класс для запросов в БД */

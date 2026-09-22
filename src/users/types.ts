@@ -1,4 +1,4 @@
-import { User } from './users.entity.js';
+import { User } from './entities/users.entity.js';
 
 export type FindUsersOptions = {
   offset?: number;

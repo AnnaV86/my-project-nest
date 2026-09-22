@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ILike, IsNull, Repository, UpdateResult } from 'typeorm';
-import { FindUsersOptions, UpdateUserData } from './types.js';
-import { User } from './users.entity.js';
+import { User } from '../entities/users.entity.js';
+import { FindUsersOptions, UpdateUserData } from '../types.js';
 import { CreateUserData, UsersRepository } from './users.repository.js';
 
 /**Запросы в БД */
@@ -38,10 +38,14 @@ export class TypeOrmUsersRepository extends UsersRepository {
     age,
     login,
   }: FindUsersOptions): Promise<[User[], number]> {
+    const escapedLogin = login?.replace(/[\\%_]/g, '\\$&');
+
     return this.userRepository.findAndCount({
       where: {
         ...(age !== undefined ? { age } : {}),
-        ...(login !== undefined ? { login: ILike(`%${login}%`) } : {}),
+        ...(escapedLogin !== undefined
+          ? { login: ILike(`%${escapedLogin}%`) }
+          : {}),
       },
       order: { id: 'ASC' },
       ...(take !== undefined ? { skip, take } : {}),
