@@ -1,0 +1,8 @@
+{
+  "oxc.configPath": "./oxlint.json",
+  "oxc.lint.run": "onType",
+  "editor.renderValidationDecorations": "on",
+  "editor.codeActionsOnSave": {
+    "source.fixAll.oxc": "explicit"
+  }
+}
